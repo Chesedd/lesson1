@@ -1,0 +1,55 @@
+{
+  "id": "python-data",
+  "title": "Работа с данными в Python",
+  "age_group": "7–8 классы",
+  "assets": [{
+    "id": "students-csv",
+    "filename": "students.csv",
+    "media_type": "text/csv",
+    "description": "Учебный датасет с результатами учеников"
+  }],
+  "lessons": [{
+    "id": "pandas-intro",
+    "title": "Работа с данными в Python. Первое знакомство с pandas",
+    "age_group": "7–8 классы",
+    "content_version": "1.0.0",
+    "blocks": [{
+      "id": "dataset-csv-dataframe",
+      "title": "Датасет, CSV и DataFrame",
+      "order": 1,
+      "theory": {"parts": [
+        {"type": "heading", "text": "Данные как таблица"},
+        {"type": "paragraph", "text": "Датасет — это набор связанных данных. В таблице каждый объект занимает строку: например, одна строка описывает одного ученика. Столбец хранит один признак всех объектов — имя, оценку или число пропусков."},
+        {"type": "paragraph", "text": "CSV — простой текстовый формат таблиц. Каждая строка файла становится строкой таблицы, а значения обычно разделены запятыми. Такие файлы удобно открывать и в табличных программах, и в Python."},
+        {"type": "heading", "text": "Открываем CSV с pandas"},
+        {"type": "paragraph", "text": "pandas — библиотека для работы с таблицами. Обычно её подключают коротким именем pd, а файл читают функцией pd.read_csv(...). Результат — объект DataFrame, то есть таблица pandas."},
+        {"type": "code", "language": "python", "code": "import pandas as pd\n\ndf = pd.read_csv(\"students.csv\")\nprint(df.head())"},
+        {"type": "paragraph", "text": "Метод df.head() показывает первые пять строк и помогает быстро проверить данные. Свойство df.shape содержит пару чисел: количество строк и столбцов. Свойство df.columns содержит названия столбцов."},
+        {"type": "code", "language": "python", "code": "print(df.shape)    # например: (12, 5)\nprint(df.columns)  # названия всех столбцов"}
+      ]},
+      "exercises": [
+        {
+          "id": "load-students-head", "title": "Первые строки таблицы", "difficulty": "basic", "order": 1,
+          "statement": "Подключи pandas, загрузи students.csv в переменную df и выведи первые пять строк таблицы с помощью head().",
+          "starter_code": "import pandas as pd\n\n# Загрузи students.csv\ndf = ...\n\n# Выведи первые строки\n...",
+          "hints": ["Передай имя файла в pd.read_csv(...).", "Вызови метод head() у переменной df."],
+          "public_examples": [{"input": "students.csv", "output": "Первые 5 строк датасета"}], "asset_ids": ["students-csv"]
+        },
+        {
+          "id": "students-shape", "title": "Размер датасета", "difficulty": "intermediate", "order": 2,
+          "statement": "Загрузи students.csv и выведи размер таблицы — количество строк и столбцов.",
+          "starter_code": "import pandas as pd\n\ndf = pd.read_csv(\"students.csv\")\n# Выведи размер таблицы\n...",
+          "hints": ["Размер DataFrame хранится в свойстве shape.", "У shape нет круглых скобок."],
+          "public_examples": [{"input": "таблица из 12 строк и 5 столбцов", "output": "(12, 5)"}], "asset_ids": ["students-csv"]
+        },
+        {
+          "id": "students-columns-and-shape", "title": "Паспорт таблицы", "difficulty": "advanced", "order": 3,
+          "statement": "Загрузи students.csv. Сначала выведи названия его столбцов, затем количество строк и количество столбцов отдельными понятными сообщениями.",
+          "starter_code": "import pandas as pd\n\ndf = pd.read_csv(\"students.csv\")\n# Выведи названия столбцов\n...\n# Выведи число строк и столбцов\n...",
+          "hints": ["Названия доступны через df.columns.", "Числа из df.shape можно распаковать: rows, columns = df.shape."],
+          "public_examples": [], "asset_ids": ["students-csv"]
+        }
+      ]
+    }]
+  }]
+}
