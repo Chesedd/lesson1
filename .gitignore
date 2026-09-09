@@ -7,3 +7,5 @@ frontend/node_modules/
 frontend/dist/
 *.db
 .coverage
+frontend/src-tauri/target/
+*.tsbuildinfo

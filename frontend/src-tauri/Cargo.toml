@@ -1,0 +1,22 @@
+[package]
+name = "lesson1_desktop"
+version = "0.2.0"
+edition = "2021"
+
+[lib]
+name = "lesson1_desktop_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.32", features = ["bundled"] }
+regex = "1"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

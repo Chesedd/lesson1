@@ -1,46 +1,50 @@
-# Учебное приложение: первый вертикальный срез
+# Учебное desktop-приложение
 
-Минимальное приложение показывает version-controlled урок pandas, создаёт анонимную learner-session и вычисляет прогресс по доверенным записям PostgreSQL. Выполнение пользовательского кода и проверка решений намеренно не входят в этот этап.
+Локальный vertical slice урока для 7–8 классов «Работа с данными в Python. Первое знакомство с pandas». Tauri 2 запускает React UI в отдельном окне, Rust валидирует bundled content и читает доверенный прогресс из локальной SQLite. Интернет, сервер, Docker и PostgreSQL для работы приложения не нужны.
 
-## Требования
+## Требования для Windows
 
-- Python 3.12+, Node.js 22+ и npm 10+
-- Docker с Compose
+- Node.js 22+ и npm 10+;
+- стабильный Rust toolchain с MSVC target (`rustup default stable-msvc`);
+- Microsoft C++ Build Tools и Windows 10/11 SDK;
+- WebView2 Runtime (в актуальных Windows 10/11 обычно уже установлен).
 
-## Структура
+Полный актуальный перечень platform prerequisites приведён в документации Tauri 2. Архитектура переносима, но первый поддерживаемый target — Windows.
 
-- `backend/` — синхронный FastAPI, SQLAlchemy 2, Alembic и pytest.
-- `frontend/` — React, TypeScript, Vite, Vitest и Testing Library.
-- `content/` — строго валидируемый JSON manifest и учебные assets.
-- `docs/adr/` — архитектурные решения.
-
-## Локальный запуск
-
-```bash
-docker compose up -d postgres
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.lock
-alembic upgrade head
-uvicorn app.main:app --reload
-```
-
-В другом терминале:
+## Запуск
 
 ```bash
 cd frontend
 npm ci
-npm run dev
+npm run tauri dev
 ```
 
-Откройте `http://localhost:5173/lessons/pandas-intro`. Vite проксирует `/api` на backend. Для production задайте `COOKIE_SECURE=true`; также настройте `DATABASE_URL`, `CONTENT_MANIFEST_PATH` и `CORS_ORIGIN` при необходимости.
+Tauri запускает Vite автоматически и открывает урок в desktop window. FastAPI в фоне не запускается.
 
-## Миграции и проверки
+## Production build
 
 ```bash
-cd backend && alembic upgrade head
-cd backend && pytest
+cd frontend
+npm run tauri build
+```
+
+Manifest и CSV включаются в resources. SQLite `progress.sqlite3` автоматически создаётся в стандартном application data directory (`ru.lesson1.desktop`), независимо от рабочей директории и расположения executable.
+
+## Проверки
+
+```bash
 cd frontend && npm test
 cd frontend && npm run lint
 cd frontend && npm run build
+cargo test --manifest-path frontend/src-tauri/Cargo.toml
+cargo check --manifest-path frontend/src-tauri/Cargo.toml
 ```
+
+## Структура и границы
+
+- `frontend/` — сохранённый React/TypeScript lesson UI и mockable service boundary над Tauri IPC.
+- `frontend/src-tauri/` — Tauri shell, Rust validation/application layer и SQLite repository.
+- `content/` — version-controlled публичный manifest и CSV, попадающие в bundle.
+- `docs/adr/` — история архитектурных решений; web baseline в ADR 0001 заменён ADR 0002.
+
+Доступные UI команды только читают урок и progress. Команд произвольного SQL или ручного completion нет. Python execution, Run, Check и graders намеренно ещё не реализованы.
