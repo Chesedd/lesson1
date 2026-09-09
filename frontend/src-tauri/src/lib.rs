@@ -11,7 +11,9 @@ use tauri::{Manager, State};
 use thiserror::Error;
 
 mod runner;
-pub use runner::{PythonRuntimeResolver, RunExerciseRequestV1, RunExerciseResultV1, RunStatus};
+pub use runner::{
+    PythonRuntimeResolver, RunExerciseRequestV1, RunExerciseResultV1, RunStatus, SandboxReadiness,
+};
 
 #[derive(Debug, Error)]
 pub enum AppError {

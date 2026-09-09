@@ -12,6 +12,20 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(windows)]
+mod windows;
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SandboxReadiness {
+    Ready,
+    UnsupportedOs,
+    RuntimeMissing,
+    RuntimeInvalid,
+    AppcontainerUnavailable,
+    SandboxInitializationFailed,
+}
+
 pub const MAX_CODE_BYTES: usize = 64 * 1024;
 const WALL_TIMEOUT: Duration = Duration::from_secs(4);
 const MAX_STDOUT_BYTES: usize = 64 * 1024;
@@ -37,6 +51,7 @@ pub enum RunStatus {
     SyntaxError,
     Timeout,
     OutputLimit,
+    ResourceLimit,
     RunnerError,
 }
 
@@ -60,9 +75,11 @@ struct ControlledRuntimeResolver {
 }
 impl PythonRuntimeResolver for ControlledRuntimeResolver {
     fn resolve(&self) -> std::result::Result<PathBuf, String> {
-        #[cfg(not(debug_assertions))]
+        #[cfg(all(not(debug_assertions), not(windows)))]
+        return Err("production Run requires the Windows sandbox".into());
+        #[cfg(all(not(debug_assertions), windows))]
         if std::env::var("LEARNING_APP_ENABLE_PRODUCTION_RUN").as_deref() != Ok("1") {
-            return Err("production Run is disabled until OS isolation is enabled".into());
+            return Err("production Run is disabled".into());
         }
         let bundled = self.bundled_root.join(if cfg!(windows) {
             "python.exe"
@@ -114,12 +131,31 @@ impl PythonRunner {
         }
     }
 
+    pub fn sandbox_readiness(&self) -> SandboxReadiness {
+        #[cfg(not(windows))]
+        {
+            SandboxReadiness::UnsupportedOs
+        }
+        #[cfg(windows)]
+        {
+            let Ok(python) = self.resolver.resolve() else {
+                return SandboxReadiness::RuntimeMissing;
+            };
+            if validate_runtime(&python).is_err() {
+                return SandboxReadiness::RuntimeInvalid;
+            }
+            windows::readiness()
+        }
+    }
+
     fn run_inner(
         &self,
         code: &str,
         assets: &Vec<&str>,
     ) -> std::result::Result<RunExerciseResultV1, String> {
         let python = self.resolver.resolve()?;
+        #[cfg(windows)]
+        validate_runtime(&python)?;
         let workspace = Workspace::create().map_err(|_| "cannot create run workspace")?;
         File::create(workspace.path.join("student.py"))
             .and_then(|mut f| f.write_all(code.as_bytes()))
@@ -134,82 +170,101 @@ impl PythonRunner {
             )
             .map_err(|_| "exercise asset is unavailable")?;
         }
-        let mut command = Command::new(python);
-        command
-            .arg("-I")
-            .arg("-B")
-            .arg("student.py")
-            .current_dir(&workspace.path)
-            .env_clear()
-            .env("PYTHONIOENCODING", "utf-8")
-            .env("PYTHONUTF8", "1")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        #[cfg(unix)]
+        #[cfg(windows)]
+        return windows::run_python(windows::PythonLaunch {
+            executable: &python,
+            workspace: &workspace.path,
+            wall_timeout: WALL_TIMEOUT,
+            stdout_limit: MAX_STDOUT_BYTES,
+            stderr_limit: MAX_STDERR_BYTES,
+            total_output_limit: MAX_TOTAL_OUTPUT_BYTES,
+        });
+
+        #[cfg(not(windows))]
         {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-        let mut child = command
-            .spawn()
-            .map_err(|_| "cannot start controlled Python runtime")?;
-        let stdout = child.stdout.take().ok_or("runner stdout unavailable")?;
-        let stderr = child.stderr.take().ok_or("runner stderr unavailable")?;
-        let total = Arc::new(AtomicUsize::new(0));
-        let exceeded = Arc::new(AtomicBool::new(false));
-        let out_thread = read_bounded(stdout, MAX_STDOUT_BYTES, total.clone(), exceeded.clone());
-        let err_thread = read_bounded(stderr, MAX_STDERR_BYTES, total, exceeded.clone());
-        let started = Instant::now();
-        let (status, timed_out) = loop {
-            if exceeded.load(Ordering::Relaxed) {
-                kill_tree(&mut child);
-                break (None, false);
-            }
-            if let Some(s) = child
-                .try_wait()
-                .map_err(|_| "cannot monitor Python runtime")?
+            let mut command = Command::new(python);
+            command
+                .arg("-I")
+                .arg("-B")
+                .arg("student.py")
+                .current_dir(&workspace.path)
+                .env_clear()
+                .env("PYTHONIOENCODING", "utf-8")
+                .env("PYTHONUTF8", "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            #[cfg(unix)]
             {
-                break (Some(s), false);
+                use std::os::unix::process::CommandExt;
+                command.process_group(0);
             }
-            if started.elapsed() >= WALL_TIMEOUT {
-                kill_tree(&mut child);
-                break (None, true);
-            }
-            thread::sleep(Duration::from_millis(10));
-        };
-        let _ = child.wait();
-        let stdout = sanitize(
-            &String::from_utf8_lossy(&out_thread.join().unwrap_or_default()),
-            &workspace.path,
-        );
-        let stderr = sanitize(
-            &String::from_utf8_lossy(&err_thread.join().unwrap_or_default()),
-            &workspace.path,
-        );
-        let truncated = exceeded.load(Ordering::Relaxed);
-        let kind = if timed_out {
-            RunStatus::Timeout
-        } else if truncated {
-            RunStatus::OutputLimit
-        } else if status.as_ref().is_some_and(|s| s.success()) {
-            RunStatus::Success
-        } else if stderr.contains("SyntaxError:") {
-            RunStatus::SyntaxError
-        } else if stderr.contains("ImportError:") || stderr.contains("ModuleNotFoundError:") {
-            RunStatus::ImportError
-        } else {
-            RunStatus::RuntimeError
-        };
-        Ok(result(
-            kind,
-            &stdout,
-            &stderr,
-            status.and_then(|s| s.code()),
-            started,
-            truncated,
-        ))
+            let mut child = command
+                .spawn()
+                .map_err(|_| "cannot start controlled Python runtime")?;
+            let stdout = child.stdout.take().ok_or("runner stdout unavailable")?;
+            let stderr = child.stderr.take().ok_or("runner stderr unavailable")?;
+            let total = Arc::new(AtomicUsize::new(0));
+            let exceeded = Arc::new(AtomicBool::new(false));
+            let out_thread =
+                read_bounded(stdout, MAX_STDOUT_BYTES, total.clone(), exceeded.clone());
+            let err_thread = read_bounded(stderr, MAX_STDERR_BYTES, total, exceeded.clone());
+            let started = Instant::now();
+            let (status, timed_out) = loop {
+                if exceeded.load(Ordering::Relaxed) {
+                    kill_tree(&mut child);
+                    break (None, false);
+                }
+                if let Some(s) = child
+                    .try_wait()
+                    .map_err(|_| "cannot monitor Python runtime")?
+                {
+                    break (Some(s), false);
+                }
+                if started.elapsed() >= WALL_TIMEOUT {
+                    kill_tree(&mut child);
+                    break (None, true);
+                }
+                thread::sleep(Duration::from_millis(10));
+            };
+            let _ = child.wait();
+            let stdout = sanitize(
+                &String::from_utf8_lossy(&out_thread.join().unwrap_or_default()),
+                &workspace.path,
+            );
+            let stderr = sanitize(
+                &String::from_utf8_lossy(&err_thread.join().unwrap_or_default()),
+                &workspace.path,
+            );
+            let truncated = exceeded.load(Ordering::Relaxed);
+            let kind = if timed_out {
+                RunStatus::Timeout
+            } else if truncated {
+                RunStatus::OutputLimit
+            } else if status.as_ref().is_some_and(|s| s.success()) {
+                RunStatus::Success
+            } else if stderr.contains("SyntaxError:") {
+                RunStatus::SyntaxError
+            } else if stderr.contains("ImportError:") || stderr.contains("ModuleNotFoundError:") {
+                RunStatus::ImportError
+            } else {
+                RunStatus::RuntimeError
+            };
+            Ok(result(
+                kind,
+                &stdout,
+                &stderr,
+                status.and_then(|s| s.code()),
+                started,
+                truncated,
+            ))
+        }
     }
+}
+
+#[cfg(windows)]
+fn validate_runtime(python: &Path) -> Result<(), String> {
+    windows::runtime::validate(python)
 }
 
 fn read_bounded(
@@ -358,5 +413,55 @@ mod tests {
             .filter(|x| x.file_name().to_string_lossy().starts_with("learning-run-"))
             .collect();
         assert_eq!(before.len(), after.len());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_appcontainer_python_security_matrix() {
+        let Some(r) = std::env::var_os("LEARNING_APP_WINDOWS_TEST_PYTHON").map(|python| {
+            PythonRunner::with_resolver(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content/assets"),
+                Box::new(Fixed(PathBuf::from(python))),
+            )
+        }) else {
+            eprintln!("not run: LEARNING_APP_WINDOWS_TEST_PYTHON is not provisioned");
+            return;
+        };
+        let outside = std::env::temp_dir().join("outside-workspace-secret.txt");
+        fs::write(&outside, "secret").unwrap();
+        let progress = std::env::temp_dir().join("progress.sqlite3");
+        fs::write(&progress, "trusted-state").unwrap();
+        let outside_literal = format!("{:?}", outside.to_string_lossy());
+        let progress_literal = format!("{:?}", progress.to_string_lossy());
+        let cases = [
+            ("print('Привет')".into(), RunStatus::Success),
+            ("import statistics; print(statistics.mean([1,2,3]))".into(), RunStatus::Success),
+            ("open('temp.txt','w').write('ok')".into(), RunStatus::Success),
+            ("import pandas as pd; print(pd.read_csv('students.csv').shape)".into(), RunStatus::Success),
+            (format!("open({outside_literal}).read()"), RunStatus::RuntimeError),
+            (format!("import pathlib; pathlib.Path({outside_literal}).read_text()"), RunStatus::RuntimeError),
+            (format!("import shutil; shutil.copy('student.py',{outside_literal})"), RunStatus::RuntimeError),
+            (format!("open({progress_literal}).read()"), RunStatus::RuntimeError),
+            (format!("import os; os.remove({progress_literal})"), RunStatus::RuntimeError),
+            ("import socket; socket.create_connection(('127.0.0.1',9),.2)".into(), RunStatus::RuntimeError),
+            ("import socket; socket.create_connection(('1.1.1.1',53),.2)".into(), RunStatus::RuntimeError),
+            ("import subprocess,sys; subprocess.run([sys.executable,'-c','print(1)'],check=True)".into(), RunStatus::RuntimeError),
+            ("import os; assert 'LEARNING_APP_TEST_SECRET' not in os.environ".into(), RunStatus::Success),
+            ("while True: pass".into(), RunStatus::Timeout),
+            ("while True: print('flood')".into(), RunStatus::OutputLimit),
+        ];
+        for (code, expected) in cases {
+            let assets = if code.contains("students.csv") {
+                vec!["students.csv"]
+            } else {
+                vec![]
+            };
+            let actual = r.run(&code, &assets);
+            assert_eq!(actual.status, expected, "code={code}\n{}", actual.stderr);
+        }
+        assert_eq!(fs::read_to_string(&outside).unwrap(), "secret");
+        assert_eq!(fs::read_to_string(&progress).unwrap(), "trusted-state");
+        fs::remove_file(outside).unwrap();
+        fs::remove_file(progress).unwrap();
     }
 }
