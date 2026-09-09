@@ -47,4 +47,18 @@ cargo check --manifest-path frontend/src-tauri/Cargo.toml
 - `content/` — version-controlled публичный manifest и CSV, попадающие в bundle.
 - `docs/adr/` — история архитектурных решений; web baseline в ADR 0001 заменён ADR 0002.
 
-Доступные UI команды только читают урок и progress. Команд произвольного SQL или ручного completion нет. Python execution, Run, Check и graders намеренно ещё не реализованы.
+UI имеет только узкие команды чтения и `run_exercise`; generic shell, произвольного SQL и ручного completion нет. Run не оценивает решение и не меняет progress. Check и graders намеренно ещё не реализованы.
+
+## Development Python Run
+
+Run is currently a **development constrained runner, not a production sandbox**. Prepare an isolated environment with pinned CPython 3.12.8 and pandas 2.2.3, then point to its executable explicitly (PATH is not consulted):
+
+```bash
+export LEARNING_APP_PYTHON=/absolute/path/to/python
+"$LEARNING_APP_PYTHON" -I -c "import sys,pandas; print(sys.version); print(pandas.__version__)"
+cargo test --manifest-path frontend/src-tauri/Cargo.toml
+cargo test --manifest-path frontend/src-tauri/Cargo.toml development_pandas_smoke -- --ignored
+cd frontend && npm run tauri dev
+```
+
+The finished product will bundle this runtime and pandas in the installer; end users will not install Python, configure PATH, create a venv, or download packages. Release Run remains disabled behind `LEARNING_APP_ENABLE_PRODUCTION_RUN=1` until the Windows AppContainer/restricted-token, Job Object, filesystem, network, process and memory controls in [ADR 0003](docs/adr/0003-python-runner.md) are implemented. Do not enable that flag in shipped installers yet.

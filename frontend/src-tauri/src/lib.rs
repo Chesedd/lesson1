@@ -10,6 +10,9 @@ use std::{
 use tauri::{Manager, State};
 use thiserror::Error;
 
+mod runner;
+pub use runner::{PythonRuntimeResolver, RunExerciseRequestV1, RunExerciseResultV1, RunStatus};
+
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("NOT_FOUND: lesson {0}")]
@@ -22,6 +25,8 @@ pub enum AppError {
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("run request rejected: {0}")]
+    RunRequest(String),
 }
 type Result<T> = std::result::Result<T, AppError>;
 
@@ -89,6 +94,12 @@ pub struct Exercise {
     #[serde(default)]
     asset_ids: Vec<String>,
     order: u32,
+    runtime: Runtime,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Runtime {
+    Python,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -114,6 +125,7 @@ pub struct PublicExercise {
     public_examples: Vec<PublicExample>,
     assets: Vec<Asset>,
     order: u32,
+    runtime: Runtime,
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct PublicBlock {
@@ -188,6 +200,7 @@ impl ContentRepository {
                             public_examples: e.public_examples.clone(),
                             assets: e.asset_ids.iter().map(|id| (*assets[id]).clone()).collect(),
                             order: e.order,
+                            runtime: e.runtime.clone(),
                         })
                         .collect(),
                 })
@@ -302,10 +315,28 @@ impl ProgressRepository {
 pub struct Application {
     content: ContentRepository,
     progress: ProgressRepository,
+    runner: runner::PythonRunner,
 }
 impl Application {
     pub fn new(content: ContentRepository, progress: ProgressRepository) -> Self {
-        Self { content, progress }
+        Self::with_paths(
+            content,
+            progress,
+            Path::new("content/assets"),
+            Path::new("runtime"),
+        )
+    }
+    pub fn with_paths(
+        content: ContentRepository,
+        progress: ProgressRepository,
+        assets: &Path,
+        runtime: &Path,
+    ) -> Self {
+        Self {
+            content,
+            progress,
+            runner: runner::PythonRunner::new(assets.into(), runtime.into()),
+        }
     }
     pub fn get_lesson(&self, id: &str) -> Result<PublicLesson> {
         self.content.public_lesson(id)
@@ -332,6 +363,34 @@ impl Application {
             completed_exercise_ids: done,
         })
     }
+    pub fn run_exercise(&self, request: RunExerciseRequestV1) -> Result<RunExerciseResultV1> {
+        if request.protocol_version != 1 {
+            return Err(AppError::RunRequest("unsupported protocol_version".into()));
+        }
+        let lesson = self.content.lesson(&request.lesson_id)?;
+        let exercise = lesson
+            .blocks
+            .iter()
+            .flat_map(|b| &b.exercises)
+            .find(|e| e.id == request.exercise_id)
+            .ok_or_else(|| AppError::RunRequest("exercise does not belong to lesson".into()))?;
+        if request.code.as_bytes().len() > runner::MAX_CODE_BYTES {
+            return Err(AppError::RunRequest("code exceeds 65536 bytes".into()));
+        }
+        let assets: HashMap<_, _> = self
+            .content
+            .track
+            .assets
+            .iter()
+            .map(|a| (a.id.as_str(), a.filename.as_str()))
+            .collect();
+        let filenames = exercise
+            .asset_ids
+            .iter()
+            .map(|id| assets[id.as_str()])
+            .collect();
+        Ok(self.runner.run(&request.code, &filenames))
+    }
 }
 #[tauri::command]
 fn get_lesson(
@@ -347,24 +406,37 @@ fn get_lesson_progress(
 ) -> std::result::Result<Progress, String> {
     state.get_progress(&lesson_id).map_err(|e| e.to_string())
 }
+#[tauri::command]
+async fn run_exercise(
+    request: RunExerciseRequestV1,
+    state: State<'_, Application>,
+) -> std::result::Result<RunExerciseResultV1, String> {
+    state.run_exercise(request).map_err(|e| e.to_string())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            let resource = app.path().resource_dir()?.join("content/manifest.json");
+            let resource = app.path().resource_dir()?;
             let data = app.path().app_data_dir()?;
             fs::create_dir_all(&data)?;
-            let state = Application::new(
-                ContentRepository::from_path(&resource)
+            let state = Application::with_paths(
+                ContentRepository::from_path(&resource.join("content/manifest.json"))
                     .map_err(|e| tauri::Error::Setup(e.into()))?,
                 ProgressRepository::open(&data.join("progress.sqlite3"))
                     .map_err(|e| tauri::Error::Setup(e.into()))?,
+                &resource.join("content/assets"),
+                &resource.join("runtime/python-3.12.8"),
             );
             app.manage(state);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_lesson, get_lesson_progress])
+        .invoke_handler(tauri::generate_handler![
+            get_lesson,
+            get_lesson_progress,
+            run_exercise
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run desktop application")
 }
@@ -466,5 +538,75 @@ mod tests {
         );
         assert_eq!(app().get_progress("pandas-intro").unwrap().total, 3);
         assert_eq!(changed.get_progress("pandas-intro").unwrap().total, 6);
+    }
+    #[test]
+    fn run_rejects_unknown_and_mismatched_exercises() {
+        let a = app();
+        let request = |lesson: &str, exercise: &str| RunExerciseRequestV1 {
+            protocol_version: 1,
+            lesson_id: lesson.into(),
+            exercise_id: exercise.into(),
+            code: "print(1)".into(),
+        };
+        assert!(a
+            .run_exercise(request("missing", "load-students-head"))
+            .is_err());
+        assert!(a.run_exercise(request("pandas-intro", "missing")).is_err());
+        assert!(a
+            .run_exercise(RunExerciseRequestV1 {
+                protocol_version: 2,
+                ..request("pandas-intro", "load-students-head")
+            })
+            .is_err());
+        assert!(a
+            .run_exercise(RunExerciseRequestV1 {
+                code: "x".repeat(runner::MAX_CODE_BYTES + 1),
+                ..request("pandas-intro", "load-students-head")
+            })
+            .is_err());
+    }
+    #[test]
+    fn run_never_mutates_progress() {
+        let Some(python) = ["/usr/bin/python3", "/usr/local/bin/python3"]
+            .iter()
+            .map(Path::new)
+            .find(|p| p.is_file())
+        else {
+            return;
+        };
+        std::env::set_var("LEARNING_APP_PYTHON", python);
+        let a = Application::with_paths(
+            ContentRepository::from_json(MANIFEST).unwrap(),
+            ProgressRepository::memory().unwrap(),
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../content/assets")
+                .as_path(),
+            Path::new("missing-runtime"),
+        );
+        let before = a.get_progress("pandas-intro").unwrap();
+        let result = a
+            .run_exercise(RunExerciseRequestV1 {
+                protocol_version: 1,
+                lesson_id: "pandas-intro".into(),
+                exercise_id: "load-students-head".into(),
+                code: "print('ok')".into(),
+            })
+            .unwrap();
+        assert_eq!(result.status, RunStatus::Success);
+        assert_eq!(before, a.get_progress("pandas-intro").unwrap());
+    }
+    #[test]
+    #[ignore = "development runtime integration; set LEARNING_APP_PYTHON to a Python 3.12.8 environment with pandas 2.2.3"]
+    fn development_pandas_smoke() {
+        let a = app();
+        let result = a
+            .run_exercise(RunExerciseRequestV1 {
+                protocol_version: 1,
+                lesson_id: "pandas-intro".into(),
+                exercise_id: "load-students-head".into(),
+                code: "import pandas as pd\ndf=pd.read_csv('students.csv')\nprint(df.shape)".into(),
+            })
+            .unwrap();
+        assert_eq!(result.status, RunStatus::Success, "{}", result.stderr);
     }
 }
