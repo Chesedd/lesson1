@@ -30,6 +30,7 @@
       "exercises": [
         {
           "id": "load-students-head", "title": "Первые строки таблицы", "difficulty": "basic", "order": 1,
+          "runtime": "python",
           "statement": "Подключи pandas, загрузи students.csv в переменную df и выведи первые пять строк таблицы с помощью head().",
           "starter_code": "import pandas as pd\n\n# Загрузи students.csv\ndf = ...\n\n# Выведи первые строки\n...",
           "hints": ["Передай имя файла в pd.read_csv(...).", "Вызови метод head() у переменной df."],
@@ -37,6 +38,7 @@
         },
         {
           "id": "students-shape", "title": "Размер датасета", "difficulty": "intermediate", "order": 2,
+          "runtime": "python",
           "statement": "Загрузи students.csv и выведи размер таблицы — количество строк и столбцов.",
           "starter_code": "import pandas as pd\n\ndf = pd.read_csv(\"students.csv\")\n# Выведи размер таблицы\n...",
           "hints": ["Размер DataFrame хранится в свойстве shape.", "У shape нет круглых скобок."],
@@ -44,6 +46,7 @@
         },
         {
           "id": "students-columns-and-shape", "title": "Паспорт таблицы", "difficulty": "advanced", "order": 3,
+          "runtime": "python",
           "statement": "Загрузи students.csv. Сначала выведи названия его столбцов, затем количество строк и количество столбцов отдельными понятными сообщениями.",
           "starter_code": "import pandas as pd\n\ndf = pd.read_csv(\"students.csv\")\n# Выведи названия столбцов\n...\n# Выведи число строк и столбцов\n...",
           "hints": ["Названия доступны через df.columns.", "Числа из df.shape можно распаковать: rows, columns = df.shape."],
