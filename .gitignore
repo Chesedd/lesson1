@@ -9,3 +9,4 @@ frontend/dist/
 .coverage
 frontend/src-tauri/target/
 *.tsbuildinfo
+artifacts/windows-verification/
