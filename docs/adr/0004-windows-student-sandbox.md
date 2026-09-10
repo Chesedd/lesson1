@@ -4,7 +4,7 @@
 
 ## Decision
 
-Use a stable ordinary AppContainer profile with zero capabilities, a per-run Job Object, explicit workspace/runtime ACLs, a minimal Unicode environment, and bundled CPython 3.12.8 with pandas 2.2.3. Unsafe Win32 code is confined to `runner/windows`; owned handles close through RAII.
+Use a stable ordinary AppContainer profile with zero capabilities, a per-run Job Object, explicit workspace/runtime ACLs, a minimal Unicode environment, and bundled CPython 3.12.10 with pandas 2.2.3. Unsafe Win32 code is confined to `runner/windows`; owned handles close through RAII.
 
 LPAC is not selected yet. It cannot honestly be selected without running the probe, CPython standard-library, and pandas matrix on Windows. Ordinary AppContainer is the conservative initial implementation; after the matrix exists, LPAC will be tested and adopted only if it needs no broad capability or ACL grants.
 

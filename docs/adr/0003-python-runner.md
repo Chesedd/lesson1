@@ -20,12 +20,12 @@ Trusted limits are: code 65,536 bytes; wall time 4 seconds; stdout 65,536 bytes;
 
 ## Runtime and packaging
 
-The pinned target is **CPython 3.12.8** with **pandas 2.2.3** (and dependencies locked by the build pipeline). Development requires an absolute executable file in `LEARNING_APP_PYTHON`; PATH is never searched. This interpreter must be a controlled environment with the pinned packages.
+The pinned target is **CPython 3.12.10** with **pandas 2.2.3** (and dependencies locked by the build pipeline). Development requires an absolute executable file in `LEARNING_APP_PYTHON`; PATH is never searched. This interpreter must be a controlled environment with the pinned packages.
 
 The Windows build pipeline will fetch a checksummed, organization-approved CPython distribution and locked wheels during an online build stage, verify SHA-256 values and `python --version`/package versions, then stage this offline bundle:
 
 ```
-runtime/python-3.12.8/
+runtime/python-3.12.10/
   python.exe
   python312.dll
   python312.zip

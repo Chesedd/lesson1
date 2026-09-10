@@ -433,7 +433,7 @@ pub fn run() {
                     tauri::Error::Setup((Box::new(e) as Box<dyn std::error::Error>).into())
                 })?,
                 &resource.join("content/assets"),
-                &resource.join("runtime/python-3.12.8"),
+                &resource.join("runtime/python-3.12.10"),
             );
             app.manage(state);
             Ok(())
@@ -602,7 +602,7 @@ mod tests {
         assert_eq!(before, a.get_progress("pandas-intro").unwrap());
     }
     #[test]
-    #[ignore = "development runtime integration; set LEARNING_APP_PYTHON to a Python 3.12.8 environment with pandas 2.2.3"]
+    #[ignore = "development runtime integration; set LEARNING_APP_PYTHON to a Python 3.12.10 environment with pandas 2.2.3"]
     fn development_pandas_smoke() {
         let a = app();
         let result = a

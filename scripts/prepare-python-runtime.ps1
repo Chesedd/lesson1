@@ -4,7 +4,7 @@ param(
   [Parameter(Mandatory=$true)][string]$Wheelhouse
 )
 $ErrorActionPreference = 'Stop'
-$ExpectedPython = '3.12.8'
+$ExpectedPython = '3.12.10'
 $ExpectedPandas = '2.2.3'
 $Root = Join-Path $PSScriptRoot '../frontend/src-tauri/runtime/windows-x86_64'
 if ((Get-FileHash $PythonArchive -Algorithm SHA256).Hash -ne $PythonArchiveSha256) { throw 'Python archive SHA-256 mismatch' }
