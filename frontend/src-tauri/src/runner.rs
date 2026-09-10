@@ -3,7 +3,6 @@ use std::{
     fs::{self, File},
     io::{Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc,
@@ -11,6 +10,9 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(not(windows))]
+use std::process::{Command, Stdio};
 
 #[cfg(windows)]
 mod windows;

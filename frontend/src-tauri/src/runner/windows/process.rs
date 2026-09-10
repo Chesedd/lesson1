@@ -4,7 +4,7 @@ use std::{
     fs::File,
     io::Read,
     mem::{size_of, zeroed},
-    os::windows::io::FromRawHandle,
+    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle as StdOwnedHandle},
     path::Path,
     ptr,
     sync::{
@@ -15,7 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
-    Foundation::{HANDLE, WAIT_OBJECT_0},
+    Foundation::{SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, WAIT_OBJECT_0},
     Security::{SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES},
     System::{Pipes::CreatePipe, Threading::*},
 };
@@ -46,17 +46,31 @@ pub(super) fn launch(
         };
         let (stdout_read, stdout_write) = pipe(&mut sa)?;
         let (stderr_read, stderr_write) = pipe(&mut sa)?;
-        SetHandleInformation(stdout_read.0, HANDLE_FLAG_INHERIT, 0);
-        SetHandleInformation(stderr_read.0, HANDLE_FLAG_INHERIT, 0);
+        if SetHandleInformation(
+            stdout_read.as_raw_handle() as HANDLE,
+            HANDLE_FLAG_INHERIT,
+            0,
+        ) == 0
+        {
+            return Err(last());
+        }
+        if SetHandleInformation(
+            stderr_read.as_raw_handle() as HANDLE,
+            HANDLE_FLAG_INHERIT,
+            0,
+        ) == 0
+        {
+            return Err(last());
+        }
 
         let mut attribute_size = 0;
         InitializeProcThreadAttributeList(ptr::null_mut(), 2, 0, &mut attribute_size);
-        let mut storage = vec![0u8; attribute_size];
-        let attributes = storage.as_mut_ptr() as *mut _;
+        let mut storage = vec![0usize; attribute_size.div_ceil(size_of::<usize>())];
+        let attributes = storage.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
         if InitializeProcThreadAttributeList(attributes, 2, 0, &mut attribute_size) == 0 {
             return Err(last());
         }
-        struct AttrGuard(*mut PROC_THREAD_ATTRIBUTE_LIST);
+        struct AttrGuard(LPPROC_THREAD_ATTRIBUTE_LIST);
         impl Drop for AttrGuard {
             fn drop(&mut self) {
                 unsafe { DeleteProcThreadAttributeList(self.0) }
@@ -187,23 +201,23 @@ pub(super) fn launch(
     }
 }
 
-unsafe fn pipe(sa: *mut SECURITY_ATTRIBUTES) -> Result<(OwnedHandle, OwnedHandle), String> {
+unsafe fn pipe(sa: *mut SECURITY_ATTRIBUTES) -> Result<(StdOwnedHandle, OwnedHandle), String> {
     let (mut read, mut write) = (ptr::null_mut(), ptr::null_mut());
     if CreatePipe(&mut read, &mut write, sa, 0) == 0 {
         return Err(last());
     }
-    Ok((OwnedHandle::new(read)?, OwnedHandle::new(write)?))
+    let read = StdOwnedHandle::from_raw_handle(read as _);
+    Ok((read, OwnedHandle::new(write)?))
 }
 fn reader(
-    handle: OwnedHandle,
+    handle: StdOwnedHandle,
     limit: usize,
     total_limit: usize,
     total: Arc<AtomicUsize>,
     exceeded: Arc<AtomicBool>,
 ) -> thread::JoinHandle<Vec<u8>> {
     thread::spawn(move || {
-        let mut file = unsafe { File::from_raw_handle(handle.0 as _) };
-        std::mem::forget(handle);
+        let mut file = File::from(handle);
         let mut bytes = Vec::new();
         let mut buffer = [0u8; 4096];
         loop {

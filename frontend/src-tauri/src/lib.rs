@@ -1,5 +1,7 @@
 use regex::Regex;
-use rusqlite::{params, Connection};
+#[cfg(test)]
+use rusqlite::params;
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -82,7 +84,7 @@ pub enum TheoryPart {
     #[serde(rename = "code")]
     Code { language: String, code: String },
 }
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Exercise {
     id: String,
@@ -424,10 +426,12 @@ pub fn run() {
             let data = app.path().app_data_dir()?;
             fs::create_dir_all(&data)?;
             let state = Application::with_paths(
-                ContentRepository::from_path(&resource.join("content/manifest.json"))
-                    .map_err(|e| tauri::Error::Setup(e.into()))?,
-                ProgressRepository::open(&data.join("progress.sqlite3"))
-                    .map_err(|e| tauri::Error::Setup(e.into()))?,
+                ContentRepository::from_path(&resource.join("content/manifest.json")).map_err(
+                    |e| tauri::Error::Setup((Box::new(e) as Box<dyn std::error::Error>).into()),
+                )?,
+                ProgressRepository::open(&data.join("progress.sqlite3")).map_err(|e| {
+                    tauri::Error::Setup((Box::new(e) as Box<dyn std::error::Error>).into())
+                })?,
                 &resource.join("content/assets"),
                 &resource.join("runtime/python-3.12.8"),
             );
