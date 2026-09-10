@@ -1,5 +1,6 @@
 mod acl;
 mod app_container;
+mod environment;
 mod handles;
 mod job;
 mod process;
@@ -72,4 +73,54 @@ pub(super) fn run_python(config: PythonLaunch<'_>) -> Result<RunExerciseResultV1
         started,
         output.output_limited,
     ))
+}
+
+#[cfg(test)]
+pub(super) fn environment_diagnostic(executable: &Path) -> Result<(), String> {
+    use super::Workspace;
+    use std::fs;
+
+    super::validate_runtime(executable)?;
+    let workspace = Workspace::create().map_err(|error| format!("create workspace: {error}"))?;
+    fs::write(workspace.path.join("student.py"), "print(\"Привет\")")
+        .map_err(|error| format!("write payload: {error}"))?;
+    let identity = app_container::AppContainerIdentity::open_or_create()?;
+    acl::grant_workspace(&workspace.path, identity.sid)?;
+    acl::grant_runtime(executable.parent().ok_or("invalid runtime")?, identity.sid)?;
+
+    let defaults = environment::clean_default_entries()?;
+    let default_entry_count = defaults.len();
+    let mut names: Vec<_> = defaults
+        .iter()
+        .filter_map(|entry| environment::entry_name(entry).map(str::to_owned))
+        .collect();
+    names.sort_by_key(|name| name.to_uppercase());
+
+    println!("WINDOWS APPCONTAINER ENVIRONMENT DIAGNOSTIC\n");
+    for (label, source) in [
+        (
+            "controlled_minimal",
+            process::DiagnosticEnvironment::Controlled,
+        ),
+        (
+            "windows_default_noninherited",
+            process::DiagnosticEnvironment::WindowsDefault(defaults),
+        ),
+    ] {
+        let job = job::Job::create()?;
+        println!("{label}:");
+        match process::launch_diagnostic(executable, &workspace.path, &identity, &job, source) {
+            Ok(output) => {
+                println!("  CreateProcessW: SUCCESS");
+                println!("  process_exit: {}", output.exit_code);
+            }
+            Err(error) => println!("  {error}"),
+        }
+        if label == "windows_default_noninherited" {
+            println!("  environment_entries: {default_entry_count}");
+            println!("  environment_variable_names: {}", names.join(", "));
+        }
+    }
+    println!("\nPRODUCTION ENVIRONMENT POLICY UNCHANGED");
+    Ok(())
 }
