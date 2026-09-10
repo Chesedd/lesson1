@@ -15,29 +15,28 @@ fn main() {
     };
     let args: Vec<_> = env::args().collect();
     let result: Result<(), String> = (|| match args.get(1).map(String::as_str) {
-        Some("read-file") => fs::read(args.get(2).ok_or("path")?)
+        Some("read-file") => fs::read(args.get(2).ok_or_else(|| "path".to_string())?)
             .map(|b| println!("{}", b.len()))
             .map_err(|e| e.to_string()),
-        Some("write-file") => {
-            fs::write(args.get(2).ok_or("path")?, b"probe").map_err(|e| e.to_string())
-        }
+        Some("write-file") => fs::write(args.get(2).ok_or_else(|| "path".to_string())?, b"probe")
+            .map_err(|e| e.to_string()),
         Some("connect") => args
             .get(2)
-            .ok_or("address")
+            .ok_or_else(|| "address".to_string())
             .and_then(|s| s.parse::<SocketAddr>().map_err(|e| e.to_string()))
             .and_then(|a| {
                 TcpStream::connect_timeout(&a, Duration::from_secs(1))
                     .map(|_| ())
                     .map_err(|e| e.to_string())
             }),
-        Some("spawn-child") => Command::new(args.get(2).ok_or("executable")?)
+        Some("spawn-child") => Command::new(args.get(2).ok_or_else(|| "executable".to_string())?)
             .status()
             .map(|s| println!("{s}"))
             .map_err(|e| e.to_string()),
         Some("allocate-memory") => {
             let count = args
                 .get(2)
-                .ok_or("bytes")?
+                .ok_or_else(|| "bytes".to_string())?
                 .parse::<usize>()
                 .map_err(|e| e.to_string())?;
             let mut bytes = Vec::with_capacity(count);
