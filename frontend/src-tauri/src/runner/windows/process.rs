@@ -205,7 +205,13 @@ fn launch_inner(
             }
             #[cfg(test)]
             EnvironmentSource::WindowsDefault(entries) => {
-                build_environment_block_from_entries(entries, overrides)?
+                let system_root = windows_directory()?;
+                build_environment_block_from_entries(
+                    entries,
+                    overrides
+                        .into_iter()
+                        .chain(std::iter::once(("SystemRoot", system_root.as_str()))),
+                )?
             }
         };
         let flags = EXTENDED_STARTUPINFO_PRESENT
