@@ -17,7 +17,7 @@ use std::{
 use windows_sys::Win32::{
     Foundation::{SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT, WAIT_OBJECT_0},
     Security::{SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES},
-    System::{Pipes::CreatePipe, Threading::*},
+    System::{Pipes::CreatePipe, SystemInformation::GetWindowsDirectoryW, Threading::*},
 };
 
 pub(super) struct ProcessOutput {
@@ -52,7 +52,7 @@ pub(super) fn launch(
             0,
         ) == 0
         {
-            return Err(last());
+            return Err(last("SetHandleInformation(stdout)"));
         }
         if SetHandleInformation(
             stderr_read.as_raw_handle() as HANDLE,
@@ -60,7 +60,7 @@ pub(super) fn launch(
             0,
         ) == 0
         {
-            return Err(last());
+            return Err(last("SetHandleInformation(stderr)"));
         }
 
         let mut attribute_size = 0;
@@ -68,7 +68,7 @@ pub(super) fn launch(
         let mut storage = vec![0usize; attribute_size.div_ceil(size_of::<usize>())];
         let attributes = storage.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
         if InitializeProcThreadAttributeList(attributes, 2, 0, &mut attribute_size) == 0 {
-            return Err(last());
+            return Err(last("InitializeProcThreadAttributeList"));
         }
         struct AttrGuard(LPPROC_THREAD_ATTRIBUTE_LIST);
         impl Drop for AttrGuard {
@@ -93,7 +93,7 @@ pub(super) fn launch(
             ptr::null_mut(),
         ) == 0
         {
-            return Err(last());
+            return Err(last("UpdateProcThreadAttribute(SECURITY_CAPABILITIES)"));
         }
         let mut inherited = [stdout_write.0, stderr_write.0];
         if UpdateProcThreadAttribute(
@@ -106,7 +106,7 @@ pub(super) fn launch(
             ptr::null_mut(),
         ) == 0
         {
-            return Err(last());
+            return Err(last("UpdateProcThreadAttribute(HANDLE_LIST)"));
         }
 
         let mut startup: STARTUPINFOEXW = zeroed();
@@ -120,9 +120,15 @@ pub(super) fn launch(
         let command = format!("\"{}\" -I -B student.py", exe.display());
         let mut command: Vec<u16> = command.encode_utf16().chain(Some(0)).collect();
         let cwd: Vec<u16> = workspace.as_os_str().encode_wide().chain(Some(0)).collect();
-        let temp = workspace.display();
-        let env = format!("PYTHONIOENCODING=utf-8\0PYTHONUTF8=1\0TEMP={temp}\0TMP={temp}\0\0");
-        let mut env: Vec<u16> = env.encode_utf16().collect();
+        let workspace = workspace.as_os_str().to_string_lossy().into_owned();
+        let system_root = windows_directory()?;
+        let mut env = build_environment_block([
+            ("PYTHONIOENCODING", "utf-8"),
+            ("PYTHONUTF8", "1"),
+            ("SystemRoot", system_root.as_str()),
+            ("TEMP", workspace.as_str()),
+            ("TMP", workspace.as_str()),
+        ])?;
         let flags = EXTENDED_STARTUPINFO_PRESENT
             | CREATE_UNICODE_ENVIRONMENT
             | CREATE_SUSPENDED
@@ -140,15 +146,16 @@ pub(super) fn launch(
             &mut info,
         ) == 0
         {
-            return Err(last());
+            return Err(last("CreateProcessW"));
         }
         let process = OwnedHandle::new(info.hProcess)?;
         let thread_handle = OwnedHandle::new(info.hThread)?;
         // The primary thread remains suspended until assignment succeeds: there is
         // no interval in which Python can create a process outside this job.
-        job.assign(process.0)?;
+        job.assign(process.0)
+            .map_err(|error| format!("AssignProcessToJobObject: {error}"))?;
         if ResumeThread(thread_handle.0) == u32::MAX {
-            return Err(last());
+            return Err(last("ResumeThread"));
         }
         drop(stdout_write);
         drop(stderr_write);
@@ -204,7 +211,7 @@ pub(super) fn launch(
 unsafe fn pipe(sa: *mut SECURITY_ATTRIBUTES) -> Result<(StdOwnedHandle, OwnedHandle), String> {
     let (mut read, mut write) = (ptr::null_mut(), ptr::null_mut());
     if CreatePipe(&mut read, &mut write, sa, 0) == 0 {
-        return Err(last());
+        return Err(last("CreatePipe"));
     }
     let read = StdOwnedHandle::from_raw_handle(read as _);
     Ok((read, OwnedHandle::new(write)?))
@@ -240,8 +247,90 @@ fn reader(
         bytes
     })
 }
-fn last() -> String {
-    std::io::Error::last_os_error().to_string()
+fn last(stage: &str) -> String {
+    format!("{stage}: {}", std::io::Error::last_os_error())
+}
+
+fn windows_directory() -> Result<String, String> {
+    let mut buffer = vec![0u16; 260];
+    loop {
+        let length = unsafe { GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32) };
+        if length == 0 {
+            return Err(last("GetWindowsDirectoryW"));
+        }
+        if (length as usize) < buffer.len() {
+            buffer.truncate(length as usize);
+            return String::from_utf16(&buffer)
+                .map_err(|error| format!("GetWindowsDirectoryW returned invalid UTF-16: {error}"));
+        }
+        buffer.resize(length as usize, 0);
+    }
+}
+
+fn build_environment_block<'a>(
+    variables: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Result<Vec<u16>, String> {
+    let mut variables: Vec<_> = variables.into_iter().collect();
+    for (name, value) in &variables {
+        if name.contains('\0') || value.contains('\0') {
+            return Err("Windows environment names and values must not contain NUL".into());
+        }
+    }
+    variables.sort_by(|left, right| {
+        left.0
+            .to_uppercase()
+            .cmp(&right.0.to_uppercase())
+            .then_with(|| left.0.cmp(right.0))
+    });
+
+    let mut block = Vec::new();
+    for (name, value) in variables {
+        block.extend(name.encode_utf16());
+        block.push('=' as u16);
+        block.extend(value.encode_utf16());
+        block.push(0);
+    }
+    if block.is_empty() {
+        block.push(0);
+    }
+    block.push(0);
+    Ok(block)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_environment_block;
+
+    #[test]
+    fn controlled_environment_block_is_sorted_and_double_nul_terminated() {
+        let workspace = r"C:\student workspace";
+        let block = build_environment_block([
+            ("TMP", workspace),
+            ("SystemRoot", r"C:\Windows"),
+            ("PYTHONUTF8", "1"),
+            ("TEMP", workspace),
+            ("PYTHONIOENCODING", "utf-8"),
+        ])
+        .unwrap();
+        let entries: Vec<_> = block[..block.len() - 1]
+            .split(|unit| *unit == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| String::from_utf16(entry).unwrap())
+            .collect();
+
+        assert_eq!(
+            entries,
+            [
+                "PYTHONIOENCODING=utf-8",
+                "PYTHONUTF8=1",
+                r"SystemRoot=C:\Windows",
+                r"TEMP=C:\student workspace",
+                r"TMP=C:\student workspace",
+            ]
+        );
+        assert!(!entries.iter().any(|entry| entry.starts_with("PATH=")));
+        assert_eq!(&block[block.len() - 2..], &[0, 0]);
+    }
 }
 
 use std::os::windows::ffi::OsStrExt;

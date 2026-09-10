@@ -22,5 +22,7 @@ $Inventory = [ordered]@{
   python_exe_sha256 = (Get-FileHash (Join-Path $Root 'python.exe') -Algorithm SHA256).Hash.ToLower()
   python_dll_sha256 = (Get-FileHash (Join-Path $Root 'python312.dll') -Algorithm SHA256).Hash.ToLower()
 }
-$Inventory | ConvertTo-Json | Set-Content (Join-Path $Root 'runtime-inventory.json') -Encoding utf8
+$InventoryJson = $Inventory | ConvertTo-Json
+$Utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText((Join-Path $Root 'runtime-inventory.json'), $InventoryJson, $Utf8WithoutBom)
 Write-Host "Prepared offline runtime at $Root"
