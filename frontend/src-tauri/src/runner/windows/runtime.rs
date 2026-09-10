@@ -17,7 +17,7 @@ pub(crate) fn validate(python: &Path) -> Result<(), String> {
             .map_err(|_| "controlled runtime inventory is missing")?,
     )
     .map_err(|_| "controlled runtime inventory is invalid")?;
-    if inventory.python_version != "3.12.8" || inventory.pandas_version != "2.2.3" {
+    if inventory.python_version != "3.12.10" || inventory.pandas_version != "2.2.3" {
         return Err("controlled runtime version is invalid".into());
     }
     verify(python, &inventory.python_exe_sha256)?;

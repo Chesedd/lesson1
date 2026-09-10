@@ -51,7 +51,7 @@ UI имеет только узкие команды чтения и `run_exerci
 
 ## Development Python Run
 
-Run is currently a **development constrained runner, not a production sandbox**. Prepare an isolated environment with pinned CPython 3.12.8 and pandas 2.2.3, then point to its executable explicitly (PATH is not consulted):
+Run is currently a **development constrained runner, not a production sandbox**. Prepare an isolated environment with pinned CPython 3.12.10 and pandas 2.2.3, then point to its executable explicitly (PATH is not consulted):
 
 ```bash
 export LEARNING_APP_PYTHON=/absolute/path/to/python
