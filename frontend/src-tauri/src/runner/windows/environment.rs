@@ -1,5 +1,8 @@
+#[cfg(test)]
 use super::handles::OwnedHandle;
+#[cfg(test)]
 use std::{ffi::c_void, ptr};
+#[cfg(test)]
 use windows_sys::Win32::{
     Foundation::HANDLE,
     Security::TOKEN_QUERY,
