@@ -466,4 +466,14 @@ mod tests {
         fs::remove_file(outside).unwrap();
         fs::remove_file(progress).unwrap();
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_appcontainer_environment_diagnostic() {
+        let Some(python) = std::env::var_os("LEARNING_APP_WINDOWS_TEST_PYTHON") else {
+            eprintln!("not run: LEARNING_APP_WINDOWS_TEST_PYTHON is not provisioned");
+            return;
+        };
+        windows::environment_diagnostic(&PathBuf::from(python)).unwrap();
+    }
 }

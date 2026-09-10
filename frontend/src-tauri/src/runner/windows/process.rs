@@ -38,6 +38,72 @@ pub(super) fn launch(
     stderr_limit: usize,
     total_limit: usize,
 ) -> Result<ProcessOutput, String> {
+    launch_inner(
+        exe,
+        workspace,
+        identity,
+        job,
+        timeout,
+        stdout_limit,
+        stderr_limit,
+        total_limit,
+        EnvironmentSource::Controlled,
+    )
+}
+
+enum EnvironmentSource {
+    Controlled,
+    #[cfg(test)]
+    WindowsDefault(Vec<String>),
+}
+
+#[cfg(test)]
+pub(super) enum DiagnosticEnvironment {
+    Controlled,
+    WindowsDefault(Vec<String>),
+}
+
+#[cfg(test)]
+pub(super) fn launch_diagnostic(
+    exe: &Path,
+    workspace: &Path,
+    identity: &AppContainerIdentity,
+    job: &Job,
+    source: DiagnosticEnvironment,
+) -> Result<ProcessOutput, String> {
+    let source = match source {
+        DiagnosticEnvironment::Controlled => EnvironmentSource::Controlled,
+        DiagnosticEnvironment::WindowsDefault(entries) => {
+            EnvironmentSource::WindowsDefault(entries)
+        }
+    };
+    launch_inner(
+        exe,
+        workspace,
+        identity,
+        job,
+        Duration::from_secs(4),
+        64 * 1024,
+        32 * 1024,
+        80 * 1024,
+        source,
+    )
+}
+
+fn launch_inner(
+    exe: &Path,
+    workspace: &Path,
+    identity: &AppContainerIdentity,
+    job: &Job,
+    timeout: Duration,
+    stdout_limit: usize,
+    stderr_limit: usize,
+    total_limit: usize,
+    environment: EnvironmentSource,
+) -> Result<ProcessOutput, String> {
+    if !exe.is_absolute() {
+        return Err("controlled Python executable path must be absolute".into());
+    }
     unsafe {
         let mut sa = SECURITY_ATTRIBUTES {
             nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
@@ -119,22 +185,35 @@ pub(super) fn launch(
         let mut info: PROCESS_INFORMATION = zeroed();
         let command = format!("\"{}\" -I -B student.py", exe.display());
         let mut command: Vec<u16> = command.encode_utf16().chain(Some(0)).collect();
+        let application: Vec<u16> = exe.as_os_str().encode_wide().chain(Some(0)).collect();
         let cwd: Vec<u16> = workspace.as_os_str().encode_wide().chain(Some(0)).collect();
         let workspace = workspace.as_os_str().to_string_lossy().into_owned();
-        let system_root = windows_directory()?;
-        let mut env = build_environment_block([
+        let overrides = [
             ("PYTHONIOENCODING", "utf-8"),
             ("PYTHONUTF8", "1"),
-            ("SystemRoot", system_root.as_str()),
             ("TEMP", workspace.as_str()),
             ("TMP", workspace.as_str()),
-        ])?;
+        ];
+        let mut env = match environment {
+            EnvironmentSource::Controlled => {
+                let system_root = windows_directory()?;
+                build_environment_block(
+                    overrides
+                        .into_iter()
+                        .chain(std::iter::once(("SystemRoot", system_root.as_str()))),
+                )?
+            }
+            #[cfg(test)]
+            EnvironmentSource::WindowsDefault(entries) => {
+                build_environment_block_from_entries(entries, overrides)?
+            }
+        };
         let flags = EXTENDED_STARTUPINFO_PRESENT
             | CREATE_UNICODE_ENVIRONMENT
             | CREATE_SUSPENDED
             | CREATE_NO_WINDOW;
         if CreateProcessW(
-            ptr::null(),
+            application.as_ptr(),
             command.as_mut_ptr(),
             ptr::null(),
             ptr::null(),
@@ -298,8 +377,51 @@ fn build_environment_block<'a>(
 }
 
 #[cfg(test)]
+fn build_environment_block_from_entries<'a>(
+    entries: Vec<String>,
+    overrides: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Result<Vec<u16>, String> {
+    use super::environment::entry_name;
+
+    let overrides: Vec<_> = overrides.into_iter().collect();
+    let mut combined: Vec<String> = entries
+        .into_iter()
+        .filter(|entry| {
+            entry_name(entry).is_some_and(|name| {
+                !overrides
+                    .iter()
+                    .any(|(override_name, _)| name.eq_ignore_ascii_case(override_name))
+            })
+        })
+        .collect();
+    combined.extend(
+        overrides
+            .into_iter()
+            .map(|(name, value)| format!("{name}={value}")),
+    );
+    if combined.iter().any(|entry| entry.contains('\0')) {
+        return Err("Windows environment entries must not contain NUL".into());
+    }
+    combined.sort_by(|left, right| {
+        left.to_uppercase()
+            .cmp(&right.to_uppercase())
+            .then_with(|| left.cmp(right))
+    });
+    let mut block = Vec::new();
+    for entry in combined {
+        block.extend(entry.encode_utf16());
+        block.push(0);
+    }
+    if block.is_empty() {
+        block.push(0);
+    }
+    block.push(0);
+    Ok(block)
+}
+
+#[cfg(test)]
 mod tests {
-    use super::build_environment_block;
+    use super::{build_environment_block, build_environment_block_from_entries};
 
     #[test]
     fn controlled_environment_block_is_sorted_and_double_nul_terminated() {
@@ -329,6 +451,29 @@ mod tests {
             ]
         );
         assert!(!entries.iter().any(|entry| entry.starts_with("PATH=")));
+        assert_eq!(&block[block.len() - 2..], &[0, 0]);
+    }
+
+    #[test]
+    fn default_block_preserves_hidden_entries_and_applies_safe_overrides() {
+        let block = build_environment_block_from_entries(
+            vec![
+                "=C:=C:\\old".into(),
+                "Path=C:\\Windows".into(),
+                "TEMP=C:\\user-temp".into(),
+            ],
+            [("TEMP", "C:\\workspace"), ("TMP", "C:\\workspace")],
+        )
+        .unwrap();
+        let entries: Vec<_> = block[..block.len() - 1]
+            .split(|unit| *unit == 0)
+            .filter(|entry| !entry.is_empty())
+            .map(|entry| String::from_utf16(entry).unwrap())
+            .collect();
+        assert!(entries.contains(&"=C:=C:\\old".into()));
+        assert!(entries.contains(&"Path=C:\\Windows".into()));
+        assert!(entries.contains(&"TEMP=C:\\workspace".into()));
+        assert!(!entries.contains(&"TEMP=C:\\user-temp".into()));
         assert_eq!(&block[block.len() - 2..], &[0, 0]);
     }
 }
