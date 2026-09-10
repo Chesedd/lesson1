@@ -486,4 +486,14 @@ mod tests {
         };
         windows::environment_minimization_diagnostic(&PathBuf::from(python)).unwrap();
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_appcontainer_localappdata_value_diagnostic() {
+        let Some(python) = std::env::var_os("LEARNING_APP_WINDOWS_TEST_PYTHON") else {
+            eprintln!("not run: LEARNING_APP_WINDOWS_TEST_PYTHON is not provisioned");
+            return;
+        };
+        windows::localappdata_value_diagnostic(&PathBuf::from(python)).unwrap();
+    }
 }
