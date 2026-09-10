@@ -1,6 +1,7 @@
 use std::{ffi::c_void, ptr};
 use windows_sys::Win32::Security::{
-    CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName, FreeSid, PSID,
+    FreeSid, Isolation::CreateAppContainerProfile,
+    Isolation::DeriveAppContainerSidFromAppContainerName, PSID,
 };
 
 const PROFILE_NAME: &str = "ru.lesson1.desktop.student-runner";
